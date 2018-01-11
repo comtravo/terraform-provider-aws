@@ -28,7 +28,7 @@ func resourceAwsApiGatewayDeployment() *schema.Resource {
 
 			"stage_name": {
 				Type:     schema.TypeString,
-				Required: true,
+				Optional: true,
 				ForceNew: true,
 			},
 
@@ -114,19 +114,26 @@ func resourceAwsApiGatewayDeploymentRead(d *schema.ResourceData, meta interface{
 		return err
 	}
 	log.Printf("[DEBUG] Received API Gateway Deployment: %s", out)
+
 	d.Set("description", out.Description)
 
-	region := meta.(*AWSClient).region
 	stageName := d.Get("stage_name").(string)
 
-	d.Set("invoke_url", buildApiGatewayInvokeURL(restApiId, region, stageName))
+	if stageName != "" {
+		region := meta.(*AWSClient).region
+		d.Set("invoke_url", buildApiGatewayInvokeURL(restApiId, region, stageName))
 
-	accountId := meta.(*AWSClient).accountid
-	arn, err := buildApiGatewayExecutionARN(restApiId, region, accountId)
-	if err != nil {
-		return err
+		accountId := meta.(*AWSClient).accountid
+		arn, err := buildApiGatewayExecutionARN(restApiId, region, accountId)
+		if err != nil {
+			return err
+		}
+		d.Set("execution_arn", arn+"/"+stageName)
+	} else {
+		log.Printf("[DEBUG] Stage name not specified for API Gateway: %s. Setting invoke_url and execution_arn to emprty string", d.Id())
+		d.Set("invoke_url", "")
+		d.Set("execution_arn", "")
 	}
-	d.Set("execution_arn", arn+"/"+stageName)
 
 	if err := d.Set("created_date", out.CreatedDate.Format(time.RFC3339)); err != nil {
 		log.Printf("[DEBUG] Error setting created_date: %s", err)
@@ -172,11 +179,16 @@ func resourceAwsApiGatewayDeploymentDelete(d *schema.ResourceData, meta interfac
 
 	return resource.Retry(5*time.Minute, func() *resource.RetryError {
 		log.Printf("[DEBUG] schema is %#v", d)
-		if _, err := conn.DeleteStage(&apigateway.DeleteStageInput{
-			StageName: aws.String(d.Get("stage_name").(string)),
-			RestApiId: aws.String(d.Get("rest_api_id").(string)),
-		}); err == nil {
-			return nil
+
+		stageName := d.Get("stage_name").(string)
+
+		if stageName != "" {
+			if _, err := conn.DeleteStage(&apigateway.DeleteStageInput{
+				StageName: aws.String(stageName),
+				RestApiId: aws.String(d.Get("rest_api_id").(string)),
+			}); err == nil {
+				return nil
+			}
 		}
 
 		_, err := conn.DeleteDeployment(&apigateway.DeleteDeploymentInput{
